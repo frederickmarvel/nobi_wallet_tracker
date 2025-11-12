@@ -1,19 +1,34 @@
-# Omega Nobi Wallet Tracker
+# Nobi Wallet Tracker
 
-A comprehensive crypto wallet portfolio tracker built with NestJS, MySQL, and Alchemy API. This application allows you to track multiple crypto wallets across different networks, with smart filtering to avoid dust/spam tokens using a whitelist system.
+A comprehensive crypto wallet portfolio tracker built with NestJS, MySQL, and Alchemy API. This application allows you to track multiple crypto wallets across different EVM networks, with smart filtering to avoid dust/spam tokens using a whitelist system, and complete transaction history tracking.
 
 ## Features
 
 - 🏦 **Multi-Wallet Management**: Track multiple wallet addresses with custom names and descriptions
-- 🌐 **Multi-Network Support**: Support for Ethereum, Polygon, and other EVM networks
+- 🌐 **Multi-Network Support**: Support for Ethereum, Polygon, Arbitrum, Optimism, Base, and other EVM networks
 - 🔍 **Alchemy Integration**: Real-time token balance fetching using Alchemy's powerful API
+- 📜 **Transaction History**: Complete transaction tracking from genesis block (incoming & outgoing)
 - ⚡ **Smart Filtering**: Automatic spam/dust token detection and whitelist system
-- ⏰ **Automated Tracking**: Scheduled balance updates every 5 minutes
+- ⏰ **Automated Tracking**: Scheduled balance updates and transaction syncing
 - 💰 **USD Values**: Real-time USD price tracking for whitelisted tokens
 - 📊 **Portfolio Analytics**: Total portfolio value and detailed balance breakdowns
-- 🔒 **Database Storage**: Persistent data storage using MySQL
+- 🔒 **Database Storage**: Persistent data storage using MySQL with optimized indexes
 - 📚 **API Documentation**: Complete Swagger/OpenAPI documentation
 - 🎯 **RESTful API**: Clean REST endpoints for all operations
+
+## New: Transaction History Feature
+
+Track complete transaction history for all your wallets across multiple EVM chains:
+
+- ✅ **Complete History**: Fetches all transactions from genesis block (0x0)
+- ✅ **Multi-Type Support**: External, Internal, ERC20, ERC721, ERC1155 transfers
+- ✅ **Bidirectional**: Tracks both incoming and outgoing transactions
+- ✅ **Smart Pagination**: Automatically handles Alchemy API pagination
+- ✅ **Incremental Sync**: Only fetches new transactions after initial sync
+- ✅ **Sync Status Tracking**: Monitor sync progress per wallet-network
+- ✅ **Automated Scheduling**: Runs every 10 minutes (configurable)
+
+See [TRANSACTION_HISTORY.md](./TRANSACTION_HISTORY.md) for detailed documentation.
 
 ## Prerequisites
 
@@ -44,9 +59,9 @@ A comprehensive crypto wallet portfolio tracker built with NestJS, MySQL, and Al
    # Database configuration
    DATABASE_HOST=localhost
    DATABASE_PORT=3306
-   DATABASE_USERNAME=your_mysql_username
-   DATABASE_PASSWORD=your_mysql_password
-   DATABASE_NAME=omega_nobi_wallet
+   DATABASE_USERNAME=root
+   DATABASE_PASSWORD=nobicuan888
+   DATABASE_NAME=nobi_wallet_tracker
 
    # Alchemy API configuration
    ALCHEMY_API_KEY=your_alchemy_api_key_here
@@ -55,11 +70,17 @@ A comprehensive crypto wallet portfolio tracker built with NestJS, MySQL, and Al
    # Application configuration
    APP_PORT=3000
    NODE_ENV=development
+   
+   # Scheduler configuration
+   BALANCE_UPDATE_INTERVAL=300000  # 5 minutes
+   TRANSACTION_SYNC_INTERVAL=600000  # 10 minutes
+   TRANSACTION_SYNC_ENABLED=true
+   MAX_TRANSACTIONS_PER_SYNC=1000
    ```
 
 4. **Create MySQL database**
    ```sql
-   CREATE DATABASE omega_nobi_wallet;
+   CREATE DATABASE nobi_wallet_tracker;
    ```
 
 5. **Run database migrations** (if any)
@@ -99,6 +120,12 @@ npm run start:prod
 - `DELETE /api/v1/wallets/:id` - Delete wallet
 - `GET /api/v1/wallets/:id/balances` - Get wallet token balances
 - `GET /api/v1/wallets/:id/total-value` - Get total USD value
+
+### Transaction History (NEW)
+- `GET /api/v1/transactions/:walletAddress` - Get transaction history with filters
+- `POST /api/v1/transactions/sync/:walletAddress` - Manually trigger transaction sync
+- `GET /api/v1/transactions/:walletAddress/sync-status` - Get sync status
+- `GET /api/v1/transactions/:walletAddress/stats` - Get transaction statistics
 
 ### Whitelist
 - `GET /api/v1/whitelist` - Get all whitelisted tokens
@@ -153,6 +180,19 @@ curl -X POST http://localhost:3000/api/v1/whitelist \\
 curl "http://localhost:3000/api/v1/wallets/{walletId}/balances?whitelistedOnly=true&excludeDust=true"
 ```
 
+### Syncing Transaction History
+
+```bash
+# Full sync from genesis block
+curl -X POST "http://localhost:3000/api/v1/transactions/sync/0x455e53cbb86018ac2b8092fdcd39d8444affc3f6?fullSync=true&network=eth-mainnet"
+
+# Get transaction history
+curl "http://localhost:3000/api/v1/transactions/0x455e53cbb86018ac2b8092fdcd39d8444affc3f6?network=eth-mainnet&limit=100"
+
+# Get incoming ERC20 transactions only
+curl "http://localhost:3000/api/v1/transactions/0x455e53cbb86018ac2b8092fdcd39d8444affc3f6?category=erc20&direction=incoming"
+```
+
 ## Database Schema
 
 ### Wallets Table
@@ -189,6 +229,34 @@ curl "http://localhost:3000/api/v1/wallets/{walletId}/balances?whitelistedOnly=t
 - `description` (TEXT) - Token description
 - `createdAt` / `updatedAt` (TIMESTAMP)
 
+### Transaction History Table (NEW)
+- `id` (UUID) - Primary key
+- `hash` (VARCHAR) - Transaction hash
+- `fromAddress`, `toAddress` (VARCHAR) - Sender and recipient
+- `network` (VARCHAR) - Network name
+- `blockNum` (VARCHAR) - Block number (hex)
+- `blockNumDecimal` (BIGINT) - Block number (decimal)
+- `timestamp` (TIMESTAMP) - Transaction time
+- `category` (ENUM) - Transaction type (external/internal/erc20/erc721/erc1155)
+- `direction` (ENUM) - incoming/outgoing
+- `value` (DECIMAL) - Transfer amount
+- `asset` (VARCHAR) - Token symbol
+- `tokenAddress` (VARCHAR) - Token contract address
+- `isWhitelisted` (BOOLEAN) - Whether token is whitelisted
+- `walletId` (UUID) - Foreign key to wallets
+- Multiple indexes for fast querying
+
+### Wallet Sync Status Table (NEW)
+- `id` (UUID) - Primary key
+- `walletId` (UUID) - Foreign key to wallets
+- `network` (VARCHAR) - Network being synced
+- `status` (ENUM) - pending/in_progress/completed/failed
+- `lastSyncedBlock` (VARCHAR) - Last synced block
+- `lastSyncedAt` (TIMESTAMP) - Last sync time
+- `transactionCount` (INT) - Total transactions synced
+- `errorCount` (INT) - Failed sync attempts
+- `autoSync` (BOOLEAN) - Auto-sync enabled
+
 ## Spam/Dust Detection
 
 The application automatically identifies spam tokens using these patterns:
@@ -201,8 +269,19 @@ Detected spam tokens are flagged as `isDust: true` and can be filtered out.
 
 ## Scheduled Tasks
 
-- **Wallet Tracking**: Runs every 5 minutes to update balances for all active wallets
-- **Rate Limiting**: 1-second delay between wallet tracking requests to respect API limits
+- **Wallet Balance Tracking**: Runs every 5 minutes to update token balances for all active wallets
+- **Transaction History Sync**: Runs every 10 minutes to sync transactions for all active wallets
+- **Rate Limiting**: Delays between requests to respect API limits and avoid throttling
+
+## Supported Networks
+
+- Ethereum Mainnet & Sepolia
+- Polygon Mainnet & Amoy
+- Arbitrum Mainnet & Sepolia
+- Optimism Mainnet & Sepolia
+- Base Mainnet & Sepolia
+
+All networks support full transaction history tracking!
 
 ## Configuration
 

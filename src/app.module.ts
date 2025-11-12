@@ -7,6 +7,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
 import { WhitelistModule } from './modules/whitelist/whitelist.module';
 import { AlchemyModule } from './modules/alchemy/alchemy.module';
 import { TrackerModule } from './modules/tracker/tracker.module';
+import { TransactionHistoryModule } from './modules/transaction-history/transaction-history.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { TrackerModule } from './modules/tracker/tracker.module';
     WhitelistModule,
     AlchemyModule,
     TrackerModule,
+    TransactionHistoryModule,
   ],
 })
 export class AppModule {}

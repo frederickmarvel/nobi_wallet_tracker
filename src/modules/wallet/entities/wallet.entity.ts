@@ -8,6 +8,7 @@ import {
   Index,
 } from 'typeorm';
 import { WalletBalance } from './wallet-balance.entity';
+import { TransactionHistory } from '../../transaction-history/entities/transaction-history.entity';
 
 @Entity('wallets')
 export class Wallet {
@@ -44,4 +45,9 @@ export class Wallet {
     cascade: true,
   })
   balances: WalletBalance[];
+
+  @OneToMany(() => TransactionHistory, (transaction) => transaction.wallet, {
+    cascade: true,
+  })
+  transactions: TransactionHistory[];
 }

@@ -7,6 +7,13 @@ import {
   AlchemyTokenData, 
   TokensByAddressRequest 
 } from './interfaces/alchemy.interface';
+import {
+  AlchemyTransactionHistoryResponse,
+  TransactionHistoryRequest,
+  AlchemyTransferResult,
+  SUPPORTED_NETWORKS,
+  NetworkConfig,
+} from './interfaces/transaction-history.interface';
 
 @Injectable()
 export class AlchemyService {
@@ -185,5 +192,222 @@ export class AlchemyService {
     return spamPatterns.some(pattern => 
       pattern.test(name) || pattern.test(symbol)
     );
+  }
+
+  /**
+   * Get transaction history for an address using alchemy_getAssetTransfers
+   */
+  async getTransactionHistory(
+    address: string,
+    network: string,
+    options: TransactionHistoryRequest = {},
+  ): Promise<AlchemyTransactionHistoryResponse> {
+    try {
+      const networkConfig = SUPPORTED_NETWORKS[network];
+      if (!networkConfig) {
+        throw new HttpException(
+          `Unsupported network: ${network}`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      const requestPayload = {
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'alchemy_getAssetTransfers',
+        params: [
+          {
+            fromBlock: options.fromBlock || '0x0',
+            toBlock: options.toBlock || 'latest',
+            fromAddress: options.fromAddress,
+            toAddress: options.toAddress,
+            category: options.category || ['external', 'internal', 'erc20', 'erc721', 'erc1155'],
+            withMetadata: options.withMetadata !== false,
+            excludeZeroValue: options.excludeZeroValue ?? false,
+            maxCount: options.maxCount || '0x3e8', // 1000 in hex
+            ...(options.pageKey && { pageKey: options.pageKey }),
+            ...(options.contractAddresses && { contractAddresses: options.contractAddresses }),
+            ...(options.order && { order: options.order }),
+          },
+        ],
+      };
+
+      this.logger.debug(`Fetching transaction history for ${address} on ${network}`, {
+        fromBlock: options.fromBlock,
+        toBlock: options.toBlock,
+        hasPageKey: !!options.pageKey,
+      });
+
+      const rpcUrl = `${networkConfig.rpcUrl}/${this.apiKey}`;
+      const response = await this.httpClient.post<AlchemyTransactionHistoryResponse>(
+        rpcUrl,
+        requestPayload,
+      );
+
+      const transferCount = response.data.result?.transfers?.length || 0;
+      this.logger.debug(`Fetched ${transferCount} transactions for ${address}`, {
+        hasMorePages: !!response.data.result?.pageKey,
+      });
+
+      return response.data;
+    } catch (error) {
+      this.logger.error('Failed to fetch transaction history from Alchemy', {
+        error: error instanceof Error ? error.message : String(error),
+        address,
+        network,
+      });
+
+      if (axios.isAxiosError(error)) {
+        const status = error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR;
+        const message = error.response?.data?.message || 'Alchemy API error';
+        
+        throw new HttpException(
+          {
+            message: 'Failed to fetch transaction history',
+            details: message,
+          },
+          status,
+        );
+      }
+
+      throw new HttpException(
+        'Failed to fetch transaction history',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Get all transaction history for an address (handles pagination automatically)
+   */
+  async getAllTransactionHistory(
+    address: string,
+    network: string,
+    options: Omit<TransactionHistoryRequest, 'pageKey'> = {},
+  ): Promise<AlchemyTransferResult[]> {
+    const allTransfers: AlchemyTransferResult[] = [];
+    let pageKey: string | undefined;
+    let pageCount = 0;
+    const maxPages = 100; // Safety limit
+
+    this.logger.log(`Starting full transaction history sync for ${address} on ${network}`);
+
+    do {
+      try {
+        const response = await this.getTransactionHistory(address, network, {
+          ...options,
+          pageKey,
+        });
+
+        const transfers = response.result?.transfers || [];
+        allTransfers.push(...transfers);
+
+        pageKey = response.result?.pageKey;
+        pageCount++;
+
+        this.logger.debug(
+          `Page ${pageCount}: Fetched ${transfers.length} transactions (Total: ${allTransfers.length})`,
+          { hasMorePages: !!pageKey },
+        );
+
+        // Safety check to prevent infinite loops
+        if (pageCount >= maxPages) {
+          this.logger.warn(
+            `Reached maximum page limit (${maxPages}) for ${address} on ${network}`,
+          );
+          break;
+        }
+
+        // Add small delay between requests to avoid rate limiting
+        if (pageKey) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      } catch (error) {
+        this.logger.error(`Failed to fetch page ${pageCount + 1}`, {
+          error: error instanceof Error ? error.message : String(error),
+          address,
+          network,
+        });
+        throw error;
+      }
+    } while (pageKey);
+
+    this.logger.log(
+      `Completed transaction history sync for ${address} on ${network}: ${allTransfers.length} transactions`,
+    );
+
+    return allTransfers;
+  }
+
+  /**
+   * Get transactions sent FROM an address
+   */
+  async getOutgoingTransactions(
+    address: string,
+    network: string,
+    options: Omit<TransactionHistoryRequest, 'fromAddress'> = {},
+  ): Promise<AlchemyTransferResult[]> {
+    return this.getAllTransactionHistory(address, network, {
+      ...options,
+      fromAddress: address,
+    });
+  }
+
+  /**
+   * Get transactions sent TO an address
+   */
+  async getIncomingTransactions(
+    address: string,
+    network: string,
+    options: Omit<TransactionHistoryRequest, 'toAddress'> = {},
+  ): Promise<AlchemyTransferResult[]> {
+    return this.getAllTransactionHistory(address, network, {
+      ...options,
+      toAddress: address,
+    });
+  }
+
+  /**
+   * Get both incoming and outgoing transactions for an address
+   */
+  async getCompleteTransactionHistory(
+    address: string,
+    network: string,
+    options: Omit<TransactionHistoryRequest, 'fromAddress' | 'toAddress'> = {},
+  ): Promise<{ incoming: AlchemyTransferResult[]; outgoing: AlchemyTransferResult[] }> {
+    const [incoming, outgoing] = await Promise.all([
+      this.getIncomingTransactions(address, network, options),
+      this.getOutgoingTransactions(address, network, options),
+    ]);
+
+    return { incoming, outgoing };
+  }
+
+  /**
+   * Convert block number from hex to decimal
+   */
+  hexToDecimalBlockNumber(hexBlock: string): number {
+    return parseInt(hexBlock, 16);
+  }
+
+  /**
+   * Convert block number from decimal to hex
+   */
+  decimalToHexBlockNumber(decimalBlock: number): string {
+    return '0x' + decimalBlock.toString(16);
+  }
+
+  /**
+   * Get supported networks
+   */
+  getSupportedNetworks(): NetworkConfig[] {
+    return Object.values(SUPPORTED_NETWORKS);
+  }
+
+  /**
+   * Check if network is supported
+   */
+  isNetworkSupported(network: string): boolean {
+    return network in SUPPORTED_NETWORKS;
   }
 }
