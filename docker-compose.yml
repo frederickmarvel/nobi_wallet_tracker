@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:9.5.0
+    container_name: nobi-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: nobicuan888
+      MYSQL_DATABASE: nobi_wallet_tracker
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - nobi-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pnobicuan888"]
+      timeout: 20s
+      retries: 10
+      interval: 5s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nobi-wallet-tracker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+      DATABASE_USERNAME: root
+      DATABASE_PASSWORD: nobicuan888
+      DATABASE_NAME: nobi_wallet_tracker
+      PORT: 3000
+      ALCHEMY_API_KEY: ${ALCHEMY_API_KEY}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./reports:/app/reports
+      - ./.env:/app/.env:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - nobi-network
+
+networks:
+  nobi-network:
+    driver: bridge

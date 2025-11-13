@@ -15,9 +15,11 @@ export class WhitelistService {
   ) {}
 
   async create(createDto: CreateWhitelistTokenDto): Promise<WhitelistToken> {
+    const tokenAddress = createDto.tokenAddress?.toLowerCase() || null;
+    
     const existing = await this.whitelistRepository.findOne({
       where: {
-        tokenAddress: createDto.tokenAddress?.toLowerCase() || null,
+        tokenAddress: tokenAddress as any,
         network: createDto.network,
       },
     });
@@ -30,7 +32,7 @@ export class WhitelistService {
 
     const token = this.whitelistRepository.create({
       ...createDto,
-      tokenAddress: createDto.tokenAddress?.toLowerCase() || null,
+      tokenAddress: (createDto.tokenAddress?.toLowerCase() || undefined) as any,
       active: createDto.active ?? true,
     });
 
@@ -74,18 +76,15 @@ export class WhitelistService {
     const token = await this.findOne(id);
 
     if (updateDto.tokenAddress !== undefined || updateDto.network) {
-      const tokenAddress = updateDto.tokenAddress?.toLowerCase() || token.tokenAddress;
+      const tokenAddress = (updateDto.tokenAddress?.toLowerCase() || token.tokenAddress) as any;
       const network = updateDto.network || token.network;
       
-      const existing = await this.whitelistRepository.findOne({
-        where: {
-          tokenAddress,
-          network,
-          id: { $ne: id } as any,
-        },
+      const existing = await this.whitelistRepository.findOneBy({
+        tokenAddress,
+        network,
       });
 
-      if (existing) {
+      if (existing && existing.id !== id) {
         throw new ConflictException(
           `Token ${tokenAddress || 'native'} already whitelisted for network ${network}`,
         );
@@ -93,7 +92,7 @@ export class WhitelistService {
     }
 
     if (updateDto.tokenAddress !== undefined) {
-      updateDto.tokenAddress = updateDto.tokenAddress?.toLowerCase() || null;
+      updateDto.tokenAddress = (updateDto.tokenAddress?.toLowerCase() || undefined) as any;
     }
 
     Object.assign(token, updateDto);
@@ -112,7 +111,7 @@ export class WhitelistService {
   async isTokenWhitelisted(tokenAddress: string | null, network: string): Promise<boolean> {
     const token = await this.whitelistRepository.findOne({
       where: {
-        tokenAddress: tokenAddress?.toLowerCase() || null,
+        tokenAddress: (tokenAddress?.toLowerCase() || null) as any,
         network,
         active: true,
       },
@@ -136,7 +135,7 @@ export class WhitelistService {
     const defaultTokens = [
       // Ethereum Mainnet
       {
-        tokenAddress: null,
+        tokenAddress: undefined as any,
         network: 'eth-mainnet',
         symbol: 'ETH',
         name: 'Ethereum',
@@ -176,7 +175,7 @@ export class WhitelistService {
       },
       // Polygon Mainnet
       {
-        tokenAddress: null,
+        tokenAddress: undefined as any,
         network: 'polygon-mainnet',
         symbol: 'MATIC',
         name: 'Polygon',
@@ -211,15 +210,14 @@ export class WhitelistService {
       try {
         const existing = await this.whitelistRepository.findOne({
           where: {
-            tokenAddress: tokenData.tokenAddress,
+            tokenAddress: tokenData.tokenAddress as any,
             network: tokenData.network,
           },
         });
 
         if (!existing) {
-          await this.whitelistRepository.save(
-            this.whitelistRepository.create(tokenData),
-          );
+          const newToken = this.whitelistRepository.create(tokenData);
+          await this.whitelistRepository.save(newToken);
           this.logger.log(`Added default token ${tokenData.symbol} for ${tokenData.network}`);
         }
       } catch (error) {

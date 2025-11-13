@@ -119,15 +119,15 @@ export class TrackerService {
 
         const balanceData: Partial<WalletBalance> = {
           walletId,
-          tokenAddress: token.tokenAddress || null,
+          tokenAddress: token.tokenAddress || undefined,
           network: token.network,
           balance: token.tokenBalance,
           balanceDecimal,
           usdValue: usdValue || undefined,
-          symbol: token.tokenMetadata.symbol || null,
-          name: token.tokenMetadata.name || null,
-          decimals: token.tokenMetadata.decimals || null,
-          logo: token.tokenMetadata.logo || null,
+          symbol: token.tokenMetadata.symbol || undefined,
+          name: token.tokenMetadata.name || undefined,
+          decimals: token.tokenMetadata.decimals || undefined,
+          logo: token.tokenMetadata.logo || undefined,
           isWhitelisted,
           isDust,
         };

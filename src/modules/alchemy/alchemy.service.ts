@@ -23,8 +23,8 @@ export class AlchemyService {
   private readonly baseUrl: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.apiKey = this.configService.get<string>('ALCHEMY_API_KEY');
-    this.baseUrl = this.configService.get<string>('ALCHEMY_BASE_URL');
+    this.apiKey = this.configService.get<string>('ALCHEMY_API_KEY') || '';
+    this.baseUrl = this.configService.get<string>('ALCHEMY_BASE_URL') || '';
 
     if (!this.apiKey) {
       throw new Error('ALCHEMY_API_KEY is required');
@@ -224,7 +224,6 @@ export class AlchemyService {
             category: options.category || ['external', 'internal', 'erc20', 'erc721', 'erc1155'],
             withMetadata: options.withMetadata !== false,
             excludeZeroValue: options.excludeZeroValue ?? false,
-            maxCount: options.maxCount || '0x3e8', // 1000 in hex
             ...(options.pageKey && { pageKey: options.pageKey }),
             ...(options.contractAddresses && { contractAddresses: options.contractAddresses }),
             ...(options.order && { order: options.order }),

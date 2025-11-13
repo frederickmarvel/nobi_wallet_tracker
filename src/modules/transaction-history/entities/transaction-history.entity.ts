@@ -105,6 +105,10 @@ export class TransactionHistory {
   @Index()
   walletId: string;
 
+  @Column({ type: 'varchar', length: 42 })
+  @Index()
+  walletAddress: string; // The wallet address being tracked (for direct filtering)
+
   @ManyToOne(() => Wallet, (wallet) => wallet.transactions, {
     onDelete: 'CASCADE',
   })

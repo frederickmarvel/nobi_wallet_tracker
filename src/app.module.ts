@@ -25,7 +25,7 @@ import { TransactionHistoryModule } from './modules/transaction-history/transact
         password: configService.get('DATABASE_PASSWORD'),
         database: configService.get('DATABASE_NAME'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: configService.get('NODE_ENV') === 'development',
+        synchronize: true, // Auto-create tables
         logging: configService.get('NODE_ENV') === 'development',
       }),
     }),

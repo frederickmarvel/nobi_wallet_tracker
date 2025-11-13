@@ -90,54 +90,62 @@ export class TransactionHistoryService {
         `Starting transaction sync for wallet ${wallet.address} on ${network} from block ${fromBlock}`,
       );
 
-      // Fetch both incoming and outgoing transactions
-      const { incoming, outgoing } =
-        await this.alchemyService.getCompleteTransactionHistory(
-          wallet.address,
-          network,
-          {
-            fromBlock,
-            toBlock: options.toBlock || 'latest',
-          },
-        );
+      // Fetch and save transactions in batches
+      let totalSynced = 0;
+      let totalSkipped = 0;
+      let totalFetched = 0;
 
-      const allTransfers = [...incoming, ...outgoing];
-      this.logger.debug(
-        `Fetched ${allTransfers.length} transactions (${incoming.length} incoming, ${outgoing.length} outgoing)`,
-      );
-
-      // Process and save transactions
-      const { synced, skipped } = await this.saveTransactions(
+      // Fetch incoming transactions
+      const incomingResult = await this.syncTransactionBatches(
         walletId,
         wallet.address,
         network,
-        allTransfers,
+        fromBlock,
+        options.toBlock || 'latest',
+        true, // incoming
       );
+      totalSynced += incomingResult.synced;
+      totalSkipped += incomingResult.skipped;
+      totalFetched += incomingResult.fetched;
+
+      // Fetch outgoing transactions
+      const outgoingResult = await this.syncTransactionBatches(
+        walletId,
+        wallet.address,
+        network,
+        fromBlock,
+        options.toBlock || 'latest',
+        false, // outgoing
+      );
+      totalSynced += outgoingResult.synced;
+      totalSkipped += outgoingResult.skipped;
+      totalFetched += outgoingResult.fetched;
 
       // Update sync status
-      const latestBlock = this.getLatestBlockFromTransfers(allTransfers);
       syncStatus.status = SyncStatus.COMPLETED;
       syncStatus.lastSyncedAt = new Date();
-      syncStatus.transactionCount += synced;
+      syncStatus.transactionCount += totalSynced;
       syncStatus.errorCount = 0;
-      syncStatus.lastError = null;
+      syncStatus.lastError = '';
 
-      if (latestBlock) {
-        syncStatus.lastSyncedBlock = latestBlock;
-        syncStatus.lastSyncedBlockDecimal =
-          this.alchemyService.hexToDecimalBlockNumber(latestBlock);
+      if (fromBlock !== '0x0') {
+        syncStatus.lastSyncedBlock = options.toBlock || 'latest';
+        if (options.toBlock && options.toBlock !== 'latest') {
+          syncStatus.lastSyncedBlockDecimal =
+            this.alchemyService.hexToDecimalBlockNumber(options.toBlock);
+        }
       }
 
       await this.syncStatusRepository.save(syncStatus);
 
       this.logger.log(
-        `Completed sync for wallet ${wallet.address} on ${network}: ${synced} new, ${skipped} skipped`,
+        `Completed sync for wallet ${wallet.address} on ${network}: ${totalSynced} new, ${totalSkipped} skipped, ${totalFetched} total fetched`,
       );
 
       return {
-        synced,
-        skipped,
-        totalFetched: allTransfers.length,
+        synced: totalSynced,
+        skipped: totalSkipped,
+        totalFetched: totalFetched,
       };
     } catch (error) {
       this.logger.error(
@@ -159,6 +167,101 @@ export class TransactionHistoryService {
   }
 
   /**
+   * Sync transactions in batches (page by page) and save immediately
+   */
+  private async syncTransactionBatches(
+    walletId: string,
+    walletAddress: string,
+    network: string,
+    fromBlock: string,
+    toBlock: string,
+    isIncoming: boolean,
+  ): Promise<{ synced: number; skipped: number; fetched: number }> {
+    let totalSynced = 0;
+    let totalSkipped = 0;
+    let totalFetched = 0;
+    let pageKey: string | undefined;
+    let pageCount = 0;
+    const maxPages = 200; // Increased limit
+
+    this.logger.log(
+      `Syncing ${isIncoming ? 'incoming' : 'outgoing'} transactions for ${walletAddress} on ${network}`,
+    );
+
+    do {
+      try {
+        // Fetch one page
+        const response = await this.alchemyService.getTransactionHistory(
+          walletAddress,
+          network,
+          {
+            fromBlock,
+            toBlock,
+            [isIncoming ? 'toAddress' : 'fromAddress']: walletAddress,
+            pageKey,
+          },
+        );
+
+        const transfers = response.result?.transfers || [];
+        totalFetched += transfers.length;
+        pageKey = response.result?.pageKey;
+        pageCount++;
+
+        this.logger.debug(
+          `${isIncoming ? 'Incoming' : 'Outgoing'} page ${pageCount}: Fetched ${transfers.length} transactions`,
+        );
+
+        if (transfers.length > 0) {
+          // Save this batch immediately
+          const { synced, skipped } = await this.saveTransactions(
+            walletId,
+            walletAddress,
+            network,
+            transfers,
+          );
+          totalSynced += synced;
+          totalSkipped += skipped;
+
+          this.logger.log(
+            `Saved batch ${pageCount}: ${synced} new, ${skipped} duplicates (Total: ${totalSynced} saved)`,
+          );
+        }
+
+        // Safety check
+        if (pageCount >= maxPages) {
+          this.logger.warn(
+            `Reached maximum page limit (${maxPages}) for ${walletAddress} on ${network}`,
+          );
+          break;
+        }
+
+        // Small delay to avoid rate limiting
+        if (pageKey) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      } catch (error) {
+        this.logger.error(
+          `Failed to fetch/save ${isIncoming ? 'incoming' : 'outgoing'} page ${pageCount + 1}`,
+          {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        throw error;
+      }
+    } while (pageKey);
+
+    this.logger.log(
+      `Completed ${isIncoming ? 'incoming' : 'outgoing'} sync: ${totalSynced} new, ${totalSkipped} duplicates, ${totalFetched} fetched`,
+    );
+
+    return {
+      synced: totalSynced,
+      skipped: totalSkipped,
+      fetched: totalFetched,
+    };
+  }
+
+  /**
    * Save transactions to database
    */
   private async saveTransactions(
@@ -177,7 +280,6 @@ export class TransactionHistoryService {
       where: {
         hash: In(hashes),
         network,
-        walletId,
       },
       select: ['hash'],
     });
@@ -199,17 +301,51 @@ export class TransactionHistoryService {
       ),
     );
 
-    // Bulk insert
-    await this.transactionRepository.save(transactions, { chunk: 500 });
+    // Bulk insert with error handling for duplicates
+    try {
+      await this.transactionRepository.save(transactions, { chunk: 500 });
 
-    this.logger.debug(
-      `Saved ${transactions.length} new transactions to database`,
-    );
+      this.logger.debug(
+        `Saved ${transactions.length} new transactions to database`,
+      );
 
-    return {
-      synced: transactions.length,
-      skipped: transfers.length - transactions.length,
-    };
+      return {
+        synced: transactions.length,
+        skipped: transfers.length - transactions.length,
+      };
+    } catch (error) {
+      // Handle duplicate key errors gracefully
+      if (error instanceof Error && error.message.includes('Duplicate entry')) {
+        this.logger.warn(
+          `Encountered duplicate entries during batch save, saving individually`,
+        );
+
+        // Save one by one to skip duplicates
+        let savedCount = 0;
+        for (const transaction of transactions) {
+          try {
+            await this.transactionRepository.save(transaction);
+            savedCount++;
+          } catch (dupError) {
+            if (dupError instanceof Error && dupError.message.includes('Duplicate entry')) {
+              this.logger.debug(`Skipped duplicate transaction: ${transaction.hash}`);
+            } else {
+              throw dupError;
+            }
+          }
+        }
+
+        this.logger.debug(
+          `Saved ${savedCount} transactions individually, skipped ${transactions.length - savedCount} duplicates`,
+        );
+
+        return {
+          synced: savedCount,
+          skipped: transfers.length - savedCount,
+        };
+      }
+      throw error;
+    }
   }
 
   /**
@@ -243,8 +379,9 @@ export class TransactionHistoryService {
       ? new Date(transfer.metadata.blockTimestamp)
       : new Date();
 
-    return this.transactionRepository.create({
+    const transactionData = {
       walletId,
+      walletAddress: walletAddress.toLowerCase(),
       hash: transfer.hash,
       fromAddress: transfer.from.toLowerCase(),
       toAddress: transfer.to ? transfer.to.toLowerCase() : transfer.from.toLowerCase(),
@@ -254,16 +391,19 @@ export class TransactionHistoryService {
       timestamp,
       category: transfer.category as TransactionCategory,
       direction,
-      value: transfer.value ? transfer.value.toString() : null,
-      asset: transfer.asset,
-      tokenAddress: transfer.rawContract?.address?.toLowerCase() || null,
-      tokenId: transfer.tokenId,
-      erc721TokenId: transfer.erc721TokenId,
-      erc1155Metadata: transfer.erc1155Metadata,
-      rawContract: transfer.rawContract,
+      value: transfer.value ? transfer.value.toString() : undefined,
+      asset: transfer.asset || undefined,
+      tokenAddress: transfer.rawContract?.address?.toLowerCase() || undefined,
+      tokenId: transfer.tokenId || undefined,
+      erc721TokenId: transfer.erc721TokenId || undefined,
+      erc1155Metadata: transfer.erc1155Metadata || undefined,
+      rawContract: transfer.rawContract || undefined,
       isWhitelisted,
-      metadata: transfer.metadata ? JSON.stringify(transfer.metadata) : null,
-    });
+      metadata: transfer.metadata ? JSON.stringify(transfer.metadata) : undefined,
+    };
+
+    const transaction = this.transactionRepository.create(transactionData);
+    return Array.isArray(transaction) ? transaction[0] : transaction;
   }
 
   /**

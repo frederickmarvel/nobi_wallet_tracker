@@ -16,7 +16,6 @@ export class Wallet {
   id: string;
 
   @Column({ type: 'varchar', length: 42, unique: true })
-  @Index()
   address: string;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
